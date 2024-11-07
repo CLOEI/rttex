@@ -1,14 +1,14 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use flate2::read::ZlibDecoder;
+use image::{ImageBuffer, Rgba};
 use std::{
-    default,
     fs::File,
-    io::{Cursor, Read, Seek, Write},
+    io::{Cursor, Read},
     str,
 };
 
 const C_RTFILE_TEXTURE_HEADER: &str = "RTTXTR";
-const C_RTFILE_PACKAGE_LATEST_VERSION: u32 = 0;
+const C_RTFILE_PACKAGE_LATEST_VERSION: u8 = 0;
 const C_RTFILE_PACKAGE_HEADER: &str = "RTPACK";
 const C_RTFILE_PACKAGE_HEADER_BYTE_SIZE: usize = 6;
 
@@ -21,7 +21,7 @@ const RT_FORMAT_EMBEDDED_FILE: i32 = 20000000;
 struct RtFileHeader {
     file_type_id: [u8; C_RTFILE_PACKAGE_HEADER_BYTE_SIZE],
     version: u8,
-    reseved: u8,
+    reserved: u8,
 }
 
 #[derive(Debug, Default)]
@@ -32,6 +32,7 @@ enum ECompressionType {
 }
 
 #[derive(Debug, Default)]
+#[repr(i32)]
 enum ETextureFormat {
     #[default]
     GlUnsignedByte,
@@ -49,7 +50,7 @@ struct RtPackheader {
     reserved: [u8; 15],
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct RttexHeader {
     file_header: RtFileHeader,
     height: i32,
@@ -59,9 +60,9 @@ struct RttexHeader {
     original_width: i32,
     b_uses_alpha: u8,
     b_already_compressed: u8,
-    reseved_flags: [u8; 2],
+    reserved_flags: [u8; 2],
     mip_map_count: i32,
-    reserved: [u8; 16],
+    reserved: [u8; 16 * 4],
 }
 
 #[derive(Debug, Default)]
@@ -70,7 +71,7 @@ struct RttexMipHeader {
     width: i32,
     data_size: i32,
     mip_level: i32,
-    reserved: [u8; 2],
+    reserved: [u8; 2 * 4],
 }
 
 impl RtPackheader {
@@ -81,7 +82,7 @@ impl RtPackheader {
             .read_exact(&mut rt_pack_header.file_header.file_type_id)
             .expect("Failed to read file type id");
         rt_pack_header.file_header.version = cursor.read_u8().expect("Failed to read version");
-        rt_pack_header.file_header.reseved = cursor
+        rt_pack_header.file_header.reserved = cursor
             .read_u8()
             .expect("Failed to read file header reserved");
         rt_pack_header.compressed_size = cursor
@@ -104,15 +105,33 @@ impl RtPackheader {
     }
 }
 
+impl Default for RttexHeader {
+    fn default() -> Self {
+        RttexHeader {
+            file_header: RtFileHeader::default(),
+            height: 0,
+            width: 0,
+            format: ETextureFormat::GlUnsignedByte,
+            original_height: 0,
+            original_width: 0,
+            b_uses_alpha: 0,
+            b_already_compressed: 0,
+            reserved_flags: [0; 2],
+            mip_map_count: 0,
+            reserved: [0; 64],
+        }
+    }
+}
+
 impl RttexHeader {
-    fn deserialize(cursor: &mut Cursor<Vec<u8>>) -> RttexHeader {
+    fn deserialize(cursor: &mut Cursor<&Vec<u8>>) -> RttexHeader {
         let mut rttex_header = RttexHeader::default();
 
         cursor
             .read_exact(&mut rttex_header.file_header.file_type_id)
             .expect("Failed to read file type id");
         rttex_header.file_header.version = cursor.read_u8().expect("Failed to read version");
-        rttex_header.file_header.reseved = cursor
+        rttex_header.file_header.reserved = cursor
             .read_u8()
             .expect("Failed to read file header reserved");
         rttex_header.height = cursor
@@ -141,7 +160,7 @@ impl RttexHeader {
         rttex_header.b_already_compressed =
             cursor.read_u8().expect("Failed to read already compressed");
         cursor
-            .read_exact(&mut rttex_header.reseved_flags)
+            .read_exact(&mut rttex_header.reserved_flags)
             .expect("Failed to read reserved flags");
         rttex_header.mip_map_count = cursor
             .read_i32::<LittleEndian>()
@@ -154,10 +173,40 @@ impl RttexHeader {
     }
 }
 
+impl RttexMipHeader {
+    fn deserialize(cursor: &mut Cursor<&Vec<u8>>) -> RttexMipHeader {
+        let mut rttex_mip_header = RttexMipHeader::default();
+
+        rttex_mip_header.height = cursor
+            .read_i32::<LittleEndian>()
+            .expect("Failed to read height");
+        rttex_mip_header.width = cursor
+            .read_i32::<LittleEndian>()
+            .expect("Failed to read width");
+        rttex_mip_header.data_size = cursor
+            .read_i32::<LittleEndian>()
+            .expect("Failed to read data size");
+        rttex_mip_header.mip_level = cursor
+            .read_i32::<LittleEndian>()
+            .expect("Failed to read mip level");
+        cursor
+            .read_exact(&mut rttex_mip_header.reserved)
+            .expect("Failed to read reserved");
+
+        rttex_mip_header
+    }
+}
+
 fn is_a_packed_file(data: &Vec<u8>) -> bool {
     str::from_utf8(&data[0..C_RTFILE_PACKAGE_HEADER_BYTE_SIZE])
         .expect("Failed to convert to string")
         == C_RTFILE_PACKAGE_HEADER
+}
+
+fn is_a_txtr_file(data: &Vec<u8>) -> bool {
+    str::from_utf8(&data[0..C_RTFILE_PACKAGE_HEADER_BYTE_SIZE])
+        .expect("Failed to convert to string")
+        == C_RTFILE_TEXTURE_HEADER
 }
 
 fn deflate_zlib(data: Vec<u8>) -> Vec<u8> {
@@ -170,20 +219,48 @@ fn deflate_zlib(data: Vec<u8>) -> Vec<u8> {
 
 fn main() {
     let mut file_data = Vec::new();
-    let file = File::open("tiles_page1.rttex")
+    File::open("tiles_page1.rttex")
         .expect("Failed to open file")
         .read_to_end(&mut file_data)
         .expect("Failed to read file");
 
     let is_a_packed_file = is_a_packed_file(&file_data);
-    println!("Is a packed file: {}", is_a_packed_file);
 
     if is_a_packed_file {
         let mut cursor = Cursor::new(&file_data);
         let rt_pack_header = RtPackheader::deserialize(&mut cursor);
+
+        if rt_pack_header.file_header.version != C_RTFILE_PACKAGE_LATEST_VERSION {
+            panic!("Unsupported version");
+        }
+
         let decompressed_data = deflate_zlib(file_data[cursor.position() as usize..].to_vec());
-        let mut cursor = Cursor::new(decompressed_data);
-        let rttex_header = RttexHeader::deserialize(&mut cursor);
-        println!("{:?}", rttex_header);
+        let is_a_txtr_file = is_a_txtr_file(&decompressed_data);
+
+        if is_a_txtr_file {
+            let mut cursor = Cursor::new(&decompressed_data);
+            let rttex_header = RttexHeader::deserialize(&mut cursor);
+
+            for _ in 0..rttex_header.mip_map_count {
+                let _ = RttexMipHeader::deserialize(&mut cursor);
+            }
+
+            let mut image_data = vec![0; (rttex_header.width * rttex_header.height * 4) as usize];
+            cursor
+                .read_exact(&mut image_data)
+                .expect("Failed to read image data");
+
+            let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
+                rttex_header.width as u32,
+                rttex_header.height as u32,
+                image_data,
+            )
+            .expect("Failed to create image buffer");
+
+            let img = image::imageops::flip_horizontal(&img);
+            let img = image::imageops::rotate180(&img);
+
+            img.save("output.png").expect("Failed to save image");
+        }
     }
 }
