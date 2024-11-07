@@ -217,15 +217,14 @@ fn deflate_zlib(data: Vec<u8>) -> Vec<u8> {
     buffer
 }
 
-fn main() {
+pub fn get_image_buffer(path: &str) -> Option<ImageBuffer<Rgba<u8>, Vec<u8>>> {
     let mut file_data = Vec::new();
-    File::open("tiles_page1.rttex")
+    File::open(path)
         .expect("Failed to open file")
         .read_to_end(&mut file_data)
         .expect("Failed to read file");
 
     let is_a_packed_file = is_a_packed_file(&file_data);
-
     if is_a_packed_file {
         let mut cursor = Cursor::new(&file_data);
         let rt_pack_header = RtPackheader::deserialize(&mut cursor);
@@ -260,7 +259,8 @@ fn main() {
             let img = image::imageops::flip_horizontal(&img);
             let img = image::imageops::rotate180(&img);
 
-            img.save("output.png").expect("Failed to save image");
+            return Some(img);
         }
     }
+    None
 }
