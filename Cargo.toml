@@ -1,5 +1,5 @@
 [package]
-name = "rttex-parser"
+name = "rttex"
 version = "0.1.0"
 edition = "2021"
 
