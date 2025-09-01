@@ -198,12 +198,18 @@ impl RttexMipHeader {
 }
 
 fn is_a_packed_file(data: &Vec<u8>) -> bool {
+    if data.len() < C_RTFILE_PACKAGE_HEADER_BYTE_SIZE {
+        return false;
+    }
     str::from_utf8(&data[0..C_RTFILE_PACKAGE_HEADER_BYTE_SIZE])
         .expect("Failed to convert to string")
         == C_RTFILE_PACKAGE_HEADER
 }
 
 fn is_a_txtr_file(data: &Vec<u8>) -> bool {
+    if data.len() < C_RTFILE_PACKAGE_HEADER_BYTE_SIZE {
+        return false;
+    }
     str::from_utf8(&data[0..C_RTFILE_PACKAGE_HEADER_BYTE_SIZE])
         .expect("Failed to convert to string")
         == C_RTFILE_TEXTURE_HEADER
@@ -234,6 +240,11 @@ pub fn get_image_buffer(path: &str) -> Option<ImageBuffer<Rgba<u8>, Vec<u8>>> {
         }
 
         let decompressed_data = deflate_zlib(file_data[cursor.position() as usize..].to_vec());
+        
+        if decompressed_data.is_empty() {
+            return None;
+        }
+        
         let is_a_txtr_file = is_a_txtr_file(&decompressed_data);
 
         if is_a_txtr_file {
